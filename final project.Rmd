@@ -1,0 +1,733 @@
+---
+title: "Project 2"
+author: "Ankit Kamboj"
+date: "26/10/2021"
+output: html_document
+margin: 1.5 cm
+---
+**Introduction**
+
+```
+The data set analysed is titled "US Accident Injury Dataset". 
+
+Data Contains Information about the accidents in the mines in USA.
+```
+**Objective of Project**
+```
+The objective of the project is to predict what circumstances and situtations in the mine lead to Fatality. So the overall objective of all the classification models is to identify the situation or circumstance where the Fatality is likely. 
+
+The number of Fatalities in the dataset is 864 in approximately 200,000 accident events. The ratio is ~.5%, which makes the data highly unbalanced. 
+
+Even after having highly unbalanced data for fatality, still this was choosen for prediction because the impact of such finding that can reduces deaths will be maximum compared to any other finding.  
+
+This knowledge can be used by the authorities in the mine to take adequate steps to prevent the death scenarios.
+
+Lastly, the project also uses the hierarchical clustering to identify the cluster of the states based on the factors such as average injuries per accident, average injury severity level per accident, etc happening in all the mines in the state.
+
+So overall, the project helps us to identify the states which are more vulenrable to accidents.
+
+Secondly, it helps us to identify the situations that leads to fatality in the accident so that such scenarios can be addressed.
+```
+
+**About the Data**
+```
+Unique vs Duplicate variables
+Total Unique attributs: 39 
+Duplicate (Explanation) attributes: 18
+
+Categorical vs Continuous attributes
+Total Categorical attributes: 53 
+Total continous attributes: 4
+
+Total attributes: 57
+
+Total observations: 202815 (each indicates an accident event)
+```
+
+**Index of Models built in the Project**
+```
+for Predicting 'FATALITY':
+1) Single Variable Model
+2) Decision Tree
+3) kNN Model
+4) logistic Regression
+
+for Clustering states into groups:
+1) Hierarchical Clustering
+```
+
+**Loading Data and Libraries**
+```
+Libraries used:
+library(tidyverse)
+
+Data file Used:
+us_data.csv (138 mb file)
+
+```
+```{r}
+us_data <- read.csv("~/Subjects/S2_2021/Computational Data Analysis/Data/us_data.csv")
+library(tidyverse)
+```
+
+**Data Preparation**
+```{r}
+##Removing "?" from outcome variable i.e. degree of Injury:
+Lines.containing.questionmarks= grep("\\?",us_data$DEGREE_INJURY_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+
+
+##Creating new variable which contains the death as event with value 1, otherwise value 0
+us_data$FATALITY<-as.numeric(us_data$DEGREE_INJURY_CD == 1)
+
+#Splitiing of the data into train,test and calibration data:
+set.seed(729375)
+us_data$rgroup <- runif(dim(us_data)[1])
+us_dataTrainAll <- subset(us_data, rgroup<=0.9)
+dTest <- subset(us_data, rgroup>0.9)
+# names of columns that are categorical type and numerical type
+vars <- setdiff(colnames(us_dataTrainAll), c('DEGREE_INJURY_CD'))
+catVars <- vars[sapply(us_dataTrainAll[, vars], class) %in% c('factor', 'character')]
+numericVars <- vars[sapply(us_dataTrainAll[, vars], class) %in% c('numeric', 'integer')]
+# remove the original tables
+rm(list=c('us_data'))
+# split dTrainAll into a training set and a calibration set
+useForCal <- rbinom(n=dim(us_dataTrainAll)[1], size=1, prob=0.1)>0
+dCal <- subset(us_dataTrainAll, useForCal)
+dTrain <- subset(us_dataTrainAll, !useForCal)
+
+#Single Variable model:
+outcome <- 'FATALITY' 
+pos <- '1'
+
+#Function to repeat model building
+mkPredC <- function(outCol, varCol, appCol) {
+  pPos <- sum(outCol == pos) / length(outCol)
+  naTab <- table(as.factor(outCol[is.na(varCol)]))
+  pPosWna <- (naTab/sum(naTab))[pos]
+  vTab <- table(as.factor(outCol), varCol)
+  pPosWv <- (vTab[pos, ] + 1.0e-3*pPos) / (colSums(vTab) + 1.0e-3)
+  pred <- pPosWv[appCol]
+  pred[is.na(appCol)] <- pPosWna
+  pred[is.na(pred)] <- pPos
+  pred
+}
+for(v in catVars) {
+  pi <- paste('pred', v, sep='')
+  dTrain[,pi] <- mkPredC(dTrain[,outcome], dTrain[,v], dTrain[,v])
+  dCal[,pi] <- mkPredC(dTrain[,outcome], dTrain[,v], dCal[,v])
+  dTest[,pi] <- mkPredC(dTrain[,outcome], dTrain[,v], dTest[,v])
+}
+library('ROCR')
+calcAUC <- function(predcol,outcol) {
+  perf <- performance(prediction(predcol,outcol==pos),'auc')
+  as.numeric(perf@y.values)
+}
+for(v in catVars) {
+  pi <- paste('pred', v, sep='')
+  aucTrain <- calcAUC(dTrain[,pi], dTrain[,outcome])
+  if (aucTrain >= 0.8) {
+    aucCal <- calcAUC(dCal[,pi], dCal[,outcome])
+    print(sprintf(
+      "%s: trainAUC: %4.3f; calibrationAUC: %4.3f",
+      pi, aucTrain, aucCal))
+  }
+}
+```
+```
+From the list of single categorical variables, it can be seen that there is few promising variables. For example, ACTIVITY_CD’s and CLASSIFICATION_CD's calibration and training AUCs scored above 0.8.
+```
+```{r}
+
+vars <- c('ACTIVITY_CD', 'CLASSIFICATION_CD')
+for (var in vars) {
+aucs <- rep(0,100)
+for (rep in 1:length(aucs)) {
+useForCalRep <- rbinom(n=nrow(us_dataTrainAll), size=1, prob=0.1) > 0
+predRep <- mkPredC(us_dataTrainAll[!useForCalRep, outcome],
+us_dataTrainAll[!useForCalRep, var],
+us_dataTrainAll[useForCalRep, var])
+aucs[rep] <- calcAUC(predRep, us_dataTrainAll[useForCalRep, outcome])
+}
+print(sprintf("%s: mean: %4.3f; sd: %4.3f", var, mean(aucs), sd(aucs)))
+}
+```
+```
+It can be observed that mean AUC of the variable 'ACCIDENT_CD' has fallen more and where as average AUC of 'CLASSIFICATION_CD' has remained almost same. As Classification_CD has better 100-fold cross validation AUC, it is better predictor of FATALITY.
+```
+```
+Double Density Plot
+```
+```{r}
+library(ggplot2)
+str(factor(dTrain[,'ACTIVITY_CD']))
+
+str(factor(dTrain[,'CLASSIFICATION_CD']))
+
+fig1 <- ggplot(dCal) + geom_density(aes(x=predCLASSIFICATION_CD, color=as.factor(FATALITY)))
+fig2 <- ggplot(dCal) + geom_density(aes(x=predACTIVITY_CD, color=as.factor(FATALITY)))
+fig1 
+fig2
+```
+
+```
+It can be seen for the double density plot that ACTIVITY_CD is better variable as it has we can observe the clear demarcation of factor 0 on left and factor 1 on right side of the graph.
+```
+
+```{r}
+library(ROCit)
+
+plot_roc <- function(predcol, outcol, colour_id=2, overlaid=F) {
+ROCit_obj <- rocit(score=predcol, class=outcol==pos)
+par(new=overlaid)
+plot(ROCit_obj, col = c(colour_id, 1),
+legend = FALSE, YIndex = FALSE, values = FALSE)
+}
+plot_roc(dCal$predACTIVITY_CD, dCal[,outcome]) #red
+plot_roc(dCal$predCLASSIFICATION_CD, dCal[,outcome], colour_id=3, overlaid=T) # green
+```
+```
+CLASSIFICATION_CD has better ROC curve than Activity_CD. The green curve i.e. CLASSIFICATION_CD is also more closer to the top left of the box and hence more suitable for classification purpose. 
+```
+
+***Calculating Deviance***
+```{r}
+pos <- '1'
+
+logLikelihood <- function(ytrue, ypred) {
+sum(ifelse(ytrue==pos, log(ypred), log(1-ypred)), na.rm=T)
+}
+# Compute the likelihood of the Null model on the calibration
+
+outcome <- 'FATALITY'
+logNull <- logLikelihood(
+dCal[,outcome], sum(dCal[,outcome]==pos)/nrow(dCal)
+)
+cat(logNull)
+```
+```
+The Null model in this case has the deviance of -515.769
+```
+**Deviance Reduction Comparision**
+```{r}
+selCatVars <- c()
+minDrop <- 50 
+catVars1<-c('ACTIVITY_CD','CLASSIFICATION_CD')
+for (v in catVars1) {
+pi <- paste('pred', v, sep='')
+devDrop <- 2*(logLikelihood(dCal[,outcome], dCal[,pi]) - logNull)
+if (devDrop >= minDrop) {
+print(sprintf("%s, deviance reduction: %g", pi, devDrop))
+selCatVars <- c(selCatVars, pi)
+}
+}
+```
+```
+It appears that Classification_CD is better variable as the deviance drop is more with it than with the Accident_CD
+```
+```
+From the comparision of AUCs, 100-fold cross validation, ROC plot and devaince drop test is appears that most suitable plot for the single variable classification model is "CLASSIFICATION_CD"
+```
+$$\\$$
+**Decision Tree**
+```
+This is another simple model with use of simple constant on each piece. It is one of the most popular simple model as it is easy to  understand beacuse it is easy to visualise, hence we have tried to create the model
+```
+```
+Process followed:
+1) Simple Model Creation (using rpart())
+2) AUC test over Train, Test and Calibration model
+3) precision, recall and F1 caluclation of decision tree
+4) AUC plot over Test and Training data
+5) Improving the Decision tree using prediction variable as input and hyperparameters
+6) Visualisation of Decision Tree
+```
+***Building Decision Tree***
+```{r}
+library('rpart')
+(fV <- paste(outcome,'> 0 ~ ',
+paste(c('predCLASSIFICATION_CD','predACTIVITY_CD','predINJURY_SOURCE_CD','predINJ_BODY_PART_CD'), collapse=' + '),
+sep=''))
+tmodel <- rpart(fV, data=dTrain)
+
+print(calcAUC(predict(tmodel, newdata=dTrain), dTrain[,outcome]))
+
+print(calcAUC(predict(tmodel, newdata=dTest), dTest[,outcome]))
+
+print(calcAUC(predict(tmodel, newdata=dCal), dCal[,outcome]))
+```
+```
+AUC of the Decision tree is very good over the all the three type of data i.e. Train, Test and Calibration data
+```
+
+***Performance Measure of Decision Tree***
+```{r}
+performanceMeasures <- function(ytrue, ypred, model.name = "model") {
+# compute the normalised deviance
+dev.norm <- -2 * logLikelihood(ytrue, ypred)/length(ypred)
+# compute the confusion matrix
+cmat <- table(actual = ytrue, predicted = ypred)
+accuracy <- sum(diag(cmat)) / sum(cmat)
+precision <- cmat[2, 2] / sum(cmat[, 2])
+recall <- cmat[2, 2] / sum(cmat[2, ])
+f1 <- 2 * precision * recall / (precision + recall)
+data.frame(model = model.name, precision = precision,
+recall = recall, f1 = f1, dev.norm = dev.norm)
+}
+
+panderOpt <- function(){
+library(pander)
+# setting up Pander Options
+panderOptions("plain.ascii", TRUE)
+panderOptions("keep.trailing.zeros", TRUE)
+panderOptions("table.style", "simple")
+}
+# A function to pretty print the performance table of a model
+# on the training and test sets.
+pretty_perf_table <- function(model, xtrain, ytrain,
+xtest, ytest, threshold=0.5) {
+# Option setting for Pander
+panderOpt()
+perf_justify <- "lrrrr"
+# call the predict() function to do the predictions
+pred_train <- predict(model, newdata=xtrain)
+pred_test <- predict(model, newdata=xtest)
+# comparing performance on training vs. test
+trainperf_df <- performanceMeasures(
+ytrain, pred_train >= threshold, model.name="training")
+testperf_df <- performanceMeasures(
+ytest, pred_test >= threshold, model.name="test")
+# combine the two performance data frames using rbind()
+perftable <- rbind(trainperf_df, testperf_df)
+pandoc.table(perftable, justify = perf_justify)
+}
+pretty_perf_table(tmodel, dTrain[c('predCLASSIFICATION_CD','predACTIVITY_CD','predINJURY_SOURCE_CD','predINJ_BODY_PART_CD')], dTrain[,outcome]==pos,
+dTest[c('predCLASSIFICATION_CD','predACTIVITY_CD','predINJURY_SOURCE_CD','predINJ_BODY_PART_CD')], dTest[,outcome]==pos)
+```
+```
+The Model appears to be very poor on the Recall value which is of our primary concern as we donot want to miss out on any situation where the FATALITY can occur. The cost of False Negative is too high. 
+```
+***Plotting AUC***
+```{r}
+library(ROCit)
+plot_roc <- function(predcol1, outcol1, predcol2, outcol2){
+roc_1 <- rocit(score=predcol1, class=outcol1==pos)
+roc_2 <- rocit(score=predcol2, class=outcol2==pos)
+plot(roc_1, col = c("blue","green"), lwd = 3,
+legend = FALSE,YIndex = FALSE, values = TRUE, asp=1)
+lines(roc_2$TPR ~ roc_2$FPR, lwd = 3,
+col = c("red","green"), asp=1)
+legend("bottomright", col = c("blue","red", "green"),
+c("Test Data", "Training Data", "Null Model"), lwd = 2)
+}
+pred_test_roc <- predict(tmodel, newdata=dTest)
+pred_train_roc <- predict(tmodel, newdata=dTrain)
+
+plot_roc(pred_test_roc, dTest[[outcome]],
+pred_train_roc, dTrain[[outcome]])
+
+```
+```
+Though the model appears to be performing well on the ROC curve with both Test and Training Data
+```
+
+***Improvements in existing decision tree***
+```{r}
+tmodel2 <- rpart(fV, data=dTrain,
+control=rpart.control(cp=0.001, minsplit=1000,
+minbucket=1000, maxdepth=8))
+
+print(calcAUC(predict(tmodel2, newdata=dTrain[c('predCLASSIFICATION_CD','predACTIVITY_CD','predINJURY_SOURCE_CD','predINJ_BODY_PART_CD')]), dTrain[,outcome]))
+
+print(calcAUC(predict(tmodel2, newdata=dTest[c('predCLASSIFICATION_CD','predACTIVITY_CD','predINJURY_SOURCE_CD','predINJ_BODY_PART_CD')]), dTest[,outcome]))
+
+print(calcAUC(predict(tmodel2, newdata=dCal[c('predCLASSIFICATION_CD','predACTIVITY_CD','predINJURY_SOURCE_CD','predINJ_BODY_PART_CD')]), dCal[,outcome]))
+
+```
+```
+Here we Model appears to be performing better on AUC with the prediction variables and hyper parameters
+```
+
+***Visualizing the Decision Tree***
+```{r fig.height = 15, fig.width = 15}
+library(rpart.plot)
+par(cex=1.2)
+rpart.plot(tmodel2)
+```
+$$\\$$
+
+***kNN Model***
+```
+Process Followed:
+1) Data Preparation
+2) Optimisation of K-value (number of neighbours) (various Iteration done to get optimum value, here only final optimised value presented)
+3) ROC plot
+4) Recall Value measurement
+```
+
+```{r}
+#Data Preparation
+us_data <- read.csv("~/Subjects/S2_2021/Computational Data Analysis/Data/us_data.csv")
+
+#Removing "?" from outcome variable and Input: without removal of "?" kNN algorithm gives error
+Lines.containing.questionmarks= grep("\\?",us_data$DEGREE_INJURY_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks= grep("\\?",us_data$ACTIVITY_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$CLASSIFICATION_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$INJURY_SOURCE_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$INJ_BODY_PART_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$UG_LOCATION_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+
+#Outcome and Input Variable Selection
+
+us_data <- within(us_data, Death <- ifelse(DEGREE_INJURY_CD == 1,
+"Death", "non-death"))
+# set up the response variable that we try to predict and the
+# input feature columns
+outcome <- 'Death' # response variable
+features <- c('CLASSIFICATION_CD','ACTIVITY_CD','INJURY_SOURCE_CD','INJ_BODY_PART_CD', 'ACCIDENT_TIME', 'UG_LOCATION_CD','NO_INJURIES')
+
+# split into training and calibration sets
+intrain <- runif(nrow(us_data)) < 0.75
+train <- us_data[intrain,]
+calib <- us_data[!intrain,]
+cat('Training and calibration set sizes are:', nrow(train), 'and', nrow(calib))
+
+library('class')
+
+knnPred <- knn(train[features], calib[features], train[,outcome], k=5, prob=T)
+(accuracy <- sum(knnPred == calib[,outcome]) / nrow(calib))
+```
+```
+Accuracy of the kNN model is very good but is of little concern to us, we are more concerned in Recall Value.
+```
+```{r}
+(conf_mat <- table(actual=calib[,outcome], predicted=knnPred))
+```
+```
+The Recall value of the kNN Model is .0096 and hence of low value to the type of prediction that we are making
+```
+```{r}
+knnProb <- attributes(knnPred)$prob 
+knnProb <- ifelse(knnPred == "Death", knnProb, 1-knnProb)
+
+library(ROCR)
+# ypred should be a vector of probabilities;
+# ytrue should be a vector of TRUE and FALSE values or 1s and 0s.
+calcAUC <- function(ypred, ytrue) {
+perf <- performance(prediction(ypred, ytrue), 'auc')
+as.numeric(perf@y.values)
+}
+knn_us_data_AUC <- calcAUC(knnProb, calib[,outcome]=="Death")
+
+plotROC <- function(ypred, ytrue, titleString="ROC plot") {
+perf <- performance(prediction(ypred, ytrue), 'tpr', 'fpr')
+pf <- data.frame(FalsePositiveRate=perf@x.values[[1]],
+TruePositiveRate=perf@y.values[[1]])
+ggplot() + geom_line(data=pf, aes(x=FalsePositiveRate, y=TruePositiveRate),
+colour="red") +
+labs(title=titleString) +
+geom_line(aes(x=c(0,1), y=c(0,1))) +
+theme(text=element_text(size=18))
+}
+plotROC(knnProb, calib[,outcome] == "Death",
+titleString="kNN predictions on the Death events in US Accident data set")
+
+```
+```
+The ROC curve of the kNN model is also not good
+```
+$$\\$$
+***Logistic Regression***
+
+```
+Procedure followed:
+1) Data Preparation
+2) Independent Variable selection (many iteration done to find the 'significant variable', here only last 3 variables presented)
+3) Logistic Model Creation
+4) Optimising the probaility value for prediction of FATALITY variable
+5) Recall Value measurement
+```
+```{r}
+us_data <- read.csv("~/Subjects/S2_2021/Computational Data Analysis/Data/us_data.csv")
+Lines.containing.questionmarks= grep("\\?",us_data$DEGREE_INJURY_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks= grep("\\?",us_data$ACTIVITY_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$CLASSIFICATION_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$INJURY_SOURCE_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$INJ_BODY_PART_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+Lines.containing.questionmarks=grep("\\?",us_data$UG_LOCATION_CD)
+us_data <- us_data[-Lines.containing.questionmarks, ]
+
+us_data$FATALITY<-as.numeric(us_data$DEGREE_INJURY_CD == 1)
+# set up the response variable that we try to predict and the
+# input feature columns
+outcome <- 'FATALITY' # response variable
+(features <- c('CLASSIFICATION_CD','INJ_BODY_PART_CD','UG_LOCATION_CD'))
+
+set.seed(24)
+us_data$rgroup <- runif(dim(us_data)[1])
+train <- subset(us_data, rgroup<=0.80)
+test <- subset(us_data, rgroup>0.80)
+fmla <- paste(outcome, paste(features, collapse=" + "), sep=" ~ ")
+
+model <- glm(fmla,data= train ,family=binomial(link="logit"))
+```
+```
+Iterations of the Model: 
+1) Though it doesnot appear here but all the Variables in the data were used and checked if model reflected significant coefficients with smaller P-value for these variables.
+2) Finally after many Iterations, this three variable Logistic Model were found to be good and model had lowest AIC value.
+
+Inference from the Model:
+1) The significant variables in the model are CLASSIFICATION_CD13, CLASSIFICATION_CD14, INJ_BODY_PART_CD160 INJ_BODY_PART_CD420, and UG_LOCATION_CD3. These are the variables that have positive coefficients and hence directly leading to death.
+2) These above mentioned variables also have very low P-Value (less than .05)
+```
+```{r}
+train$pred <- predict(model, newdata=train, type="response")
+
+test$pred <- predict(model, newdata=test, type="response")
+
+###Picking the threshold for classification
+
+library(ROCR)
+library(grid)
+library(gridExtra)
+perf <- prediction(train$pred, train$FATALITY)
+precObj <- performance(perf, measure="prec")
+recObj <- performance(perf, measure="rec")
+thresh <- (precObj@x.values)[[1]] # threshold
+precision <- (precObj@y.values)[[1]] # precision
+recall <- (recObj@y.values)[[1]] # recall
+ROCdf <- data.frame(threshold=thresh, precision=precision, recall=recall)
+
+# Null probability
+pnull <- mean(as.numeric(train$FATALITY))
+cat('pnull =', pnull)
+#Above is the number of Fatalities (in ratio of whole data) in the data
+
+p1 <- ggplot(ROCdf, aes(x=threshold)) + geom_line(aes(y=precision/pnull)) +
+coord_cartesian(xlim = c(0,0.05), ylim=c(0,5) ) + labs(y="Enrichment rate")
+p2 <- ggplot(ROCdf, aes(x=threshold)) + geom_line(aes(y=recall)) +
+coord_cartesian(xlim = c(0,0.05))
+
+p1
+p2
+```
+```
+From the above values we can adjust the prediction variable probability value to get the high Recall Value for the data. It is optimum near .01
+```
+```{r}
+## Confusion matrix of 'at risk' predictions:
+(ctab.test <- table(actual=test$FATALITY, predicted=test$pred>0.01))
+
+(precision <- ctab.test[2,2] / sum(ctab.test[,2])) # TP / (TP+FP)
+
+(recall <- ctab.test[2,2] / sum(ctab.test[2,])) # TP / (TP+FN)
+
+(enrich <- precision / mean(as.numeric(test$FATALITY)))
+```
+```
+Hence, The Logistic Regression model helps us identify the situation (independent variables) that leads to FATALITY.
+```
+$$\\$$
+***Clustering***
+```
+Motive: To identify the cluster of States which have similar type of accidents.
+
+Data: US_data_Accidents
+
+Data Modification: For each state the sum of average of following variables wew taken
+1)Average_of_NO_INJURIES (for each state total number of injuries in the data were summed and its average was taken as variable's value)
+2)Average_of_DAYS_LOST (for all the other variable, same process is adopted as mentioned for point 1)
+3)Average_of_TOT_EXPER
+4)Average_of_DEGREE_INJURY_CD
+5)Average_of_ACCIDENT_TYPE_CD
+```
+
+```
+Procedure:
+1) Distance Matrix creation
+2) Cluster Dendrogram creation
+3) Principal Component Analysis
+4) Cluster's stability check (Clusterboot)
+5) Optimising K-value (CH Index and WSS)
+```
+```{r}
+#Data Preparation
+us_data1 <- read.csv("~/Subjects/S2_2021/Computational Data Analysis/Data/us_data_cluster_adjusted.csv")
+
+vars.to.use <- colnames(us_data1)[-1]
+scaled_df <- scale(us_data1[,vars.to.use])
+
+d <- dist(scaled_df, method="euclidean")
+
+pfit <- hclust(d, method="ward.D2") # perform hierarchical clustering
+```
+```{r fig.height = 15, fig.width = 15}
+plot(pfit, labels=us_data1$FIPS_STATE_CD, main="Cluster Dendrogram for Accidents in various states")
+rect.hclust(pfit, k=8) # k=5 means we want rectangles to be put around 5 clusters
+xx <- c(3, 7.5, 13.5, 19.5, 23.5); yy <- -3.5; clusterID <- c(3,4,2,1,5)
+text(xx, yy, clusterID, col="red") 
+```
+```{r}
+groups <- cutree(pfit, k=8)
+
+print_clusters <- function(df, groups, cols_to_print) {
+Ngroups <- max(groups)
+for (i in 1:Ngroups) {
+print(paste("cluster", i))
+print(df[groups == i, cols_to_print])
+}
+}
+#PCA
+princ <- prcomp(scaled_df) # Calculate the principal components of scaled_df
+nComp <- 2
+
+project2D <- as.data.frame(predict(princ, newdata=scaled_df)[,1:nComp])
+
+hclust.project2D <- cbind(project2D, cluster=as.factor(groups), state_code=us_data1$FIPS_STATE_CD)
+
+library('grDevices')
+find_convex_hull <- function(proj2Ddf, groups) {
+do.call(rbind,
+lapply(unique(groups),
+FUN = function(c) {
+f <- subset(proj2Ddf, cluster==c);
+f[chull(f),]
+}
+)
+)
+}
+hclust.hull <- find_convex_hull(hclust.project2D, groups)
+
+
+library(ggplot2)
+ggplot(hclust.project2D, aes(x=PC1, y=PC2)) +
+geom_point(aes(shape=cluster, color=cluster)) +
+geom_text(aes(label=us_data1$FIPS_STATE_CD, color=cluster), hjust=0, vjust=1, size=3) +
+geom_polygon(data=hclust.hull, aes(group=cluster, fill=as.factor(cluster)),alpha=0.4, linetype=0) + theme(text=element_text(size=20))
+```
+***Clusterboot***
+```{r}
+library(fpc)
+kbest.p <- 8
+cboot.hclust <- clusterboot(scaled_df, clustermethod=hclustCBI,
+method="ward.D2", k=kbest.p)
+
+groups.cboot <- cboot.hclust$result$partition
+
+1 - cboot.hclust$bootbrd/100
+```
+```
+All the clusters are Stable except cluster 4 and 6. Even these clusters have have value more than .50
+```
+```{r}
+###Optimum K number
+
+sqr_euDist <- function(x, y) {
+sum((x - y)^2)
+}
+# Function to calculate WSS of a cluster, represented as a n-by-d matrix
+# (where n and d are the numbers of rows and columns of the matrix)
+# which contains only points of the cluster.
+wss <- function(clustermat) {
+c0 <- colMeans(clustermat)
+sum(apply( clustermat, 1, FUN=function(row) {sqr_euDist(row, c0)} ))
+}
+# Function to calculate the total WSS. Argument `scaled_df`: data frame
+# with normalised numerical columns. Argument `labels`: vector containing
+# the cluster ID (starting at 1) for each row of the data frame.
+wss_total <- function(scaled_df, labels) {
+wss.sum <- 0
+k <- length(unique(labels))
+for (i in 1:k)
+wss.sum <- wss.sum + wss(subset(scaled_df, labels == i))
+wss.sum
+}
+
+# Function to calculate total sum of squared (TSS) distance of data
+# points about the (global) mean. This is the same as WSS when the
+# number of clusters (k) is 1.
+tss <- function(scaled_df) {
+wss(scaled_df)
+}
+# Function to return the CH indices computed using hierarchical
+# clustering (function `hclust`) or k-means clustering (`kmeans`)
+# for a vector of k values ranging from 1 to kmax.
+CH_index <- function(scaled_df, kmax, method="kmeans") {
+if (!(method %in% c("kmeans", "hclust")))
+stop("method must be one of c('kmeans', 'hclust')")
+npts <- nrow(scaled_df)
+wss.value <- numeric(kmax) # create a vector of numeric type
+# wss.value[1] stores the WSS value for k=1 (when all the
+# data points form 1 large cluster).
+wss.value[1] <- wss(scaled_df)
+if (method == "kmeans") {
+# kmeans
+for (k in 2:kmax) {
+clustering <- kmeans(scaled_df, k, nstart=10, iter.max=100)
+wss.value[k] <- clustering$tot.withinss
+}
+} else {
+# hclust
+d <- dist(scaled_df, method="euclidean")
+pfit <- hclust(d, method="ward.D2")
+for (k in 2:kmax) {
+labels <- cutree(pfit, k=k)
+wss.value[k] <- wss_total(scaled_df, labels)
+}
+}
+bss.value <- tss(scaled_df) - wss.value # this is a vector
+B <- bss.value / (0:(kmax-1)) # also a vector
+W <- wss.value / (npts - 1:kmax) # also a vector
+data.frame(k = 1:kmax, CH_index = B/W, WSS = wss.value)
+}
+
+library(gridExtra)
+# calculate the CH criterion
+crit.df <- CH_index(scaled_df, 10, method="hclust")
+fig1 <- ggplot(crit.df, aes(x=k, y=CH_index)) +
+geom_point() + geom_line(colour="red") +
+scale_x_continuous(breaks=1:10, labels=1:10) +
+labs(y="CH index") + theme(text=element_text(size=20))
+fig2 <- ggplot(crit.df, aes(x=k, y=WSS), color="blue") +
+geom_point() + geom_line(colour="blue") +
+scale_x_continuous(breaks=1:10, labels=1:10) +
+theme(text=element_text(size=20))
+
+grid.arrange(fig1, fig2, nrow=1)
+```
+```
+Highest CH Index is for cluster number 3. Then it increases for around 8 and it goes on increasing.
+
+WSS value is highest for WSS of 1 and goes to fall beyond that.
+```
+***Conclusion***
+```
+To reduce the FATALITY scenario in the mines, the Logistic Regression model appears to be the better when compared to kNN model, Clustering and Single Variable Model.
+
+Outcome of Logistic Model:
+The Following Scenarios lead to Maximum Fatalites:
+1) CLASSIFICATION_CD13: HOISTING is the circumstance which contribute most directly to the resulting Fatality
+
+2) CLASSIFICATION_CD14: IGNITION OR EXPLOSION OF GAS OR DUST is the circumstance which contribute most directly to the resulting Fatality
+
+3) INJ_BODY_PART_CD160: SKULL is the body part which is most injured in fatality cases
+
+4) INJ_BODY_PART_CD420: BACK (MUSCLES/SPINE/S-CORD/TAILBONE) is the body part which is most injured in fatality cases
+
+5) and UG_LOCATION_CD3: FACE is the underground location in the mine where most of the Fatalities occur
+
+If the above scenarios are addressed the Fatalities in the mine can be reduced a lot.
+
+The prediction of Logistic regression model for Fatality is very high and hence dependable.
+```
